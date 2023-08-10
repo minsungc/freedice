@@ -1,11 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-incomplete-patterns #-}
 
-import Data.Text
+import Data.Text ( splitOn, append, Text )
 -- Imports that will be needed later:
 import qualified Data.Text.IO as T
-import Data.Map as Map
-import Control.Applicative
+import Data.Map as Map ( fromList, lookup, Map )
+import Control.Applicative ()
 
 data LoginError =
     InvalidEmail | NoSuchUser | WrongPassword
@@ -37,6 +37,29 @@ getToken' :: IO (Either LoginError Text)
 getToken' = do
     T.putStrLn "Enter email address:"
     fmap getDomain T.getLine
+    
+users :: Map Text Text
+users = Map.fromList
+    [ ("example.com", "qwerty123")
+    , ("localhost", "password")
+    ]
+
+userLogin' :: IO (Either LoginError Text)
+userLogin' = do
+    token <- getToken'
+    case token of
+        Right domain ->
+            case Map.lookup domain users of
+                Just userpw -> do
+                    T.putStrLn "Enter password:"
+                    password <- T.getLine
+                    if userpw == password then
+                        return token
+                    else
+                        return (Left WrongPassword)
+                Nothing ->
+                    return (Left NoSuchUser)
+        left -> return left
 
 newtype EitherIO e a = EitherIO {
     runEitherIO :: IO (Either e a)
@@ -74,3 +97,46 @@ getToken = do
     EitherIO $ fmap Right (T.putStrLn "Enter email address: ")
     input <- EitherIO (fmap Right T.getLine)
     EitherIO (return (getDomain input))
+
+liftEither :: Either e a -> EitherIO e a
+liftEither x = EitherIO $ return x
+
+liftIO :: IO a -> EitherIO e a
+liftIO x = EitherIO $ fmap Right x
+
+getTokenRedone :: EitherIO LoginError Text
+getTokenRedone = do
+    liftIO $ T.putStrLn "Enter email address: "
+    input <- liftIO T.getLine
+    liftEither $ getDomain input
+
+userLogin :: EitherIO LoginError Text
+userLogin = do
+    token <- getTokenRedone
+    userpw <- maybe (throwE NoSuchUser)
+        return (Map.lookup token users)
+    password <- liftIO (
+        T.putStrLn "Enter your password:" >>
+        T.getLine)
+    if userpw == password then
+        return token
+    else
+        throwE WrongPassword
+
+throwE :: e -> EitherIO e a
+throwE x = liftEither (Left x)
+
+newtype ExceptIO e a = ExceptIO {
+    runExceptIO :: IO (Either e a)
+}
+
+catchE :: ExceptIO e a -> (e -> ExceptIO e a)
+       -> ExceptIO e a
+catchE throwing handler =
+    ExceptIO $ do
+        result <- runExceptIO throwing
+        case result of
+            Left failure ->
+                runExceptIO (handler failure)
+            success ->
+                return success
